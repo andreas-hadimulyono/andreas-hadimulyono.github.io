@@ -1,0 +1,160 @@
+---
+title: "Practical Machine Learning Project"
+author: "Andreas Hadimulyono"
+date: "Saturday, November 21, 2015"
+output: html_document
+---
+
+## ABSTRACT
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+This project aims to predict the manner of an exercise given all the predictors in the data set. The project start by getting and filtering the data, followed by partitioning the data into training and test set. The training set will then be used to make a prediction model using random forest algorithm. The final model will then be used on the test data set to evaluate the accuracy of the model.
+
+## GETTING AND FILTERING DATA
+
+``` {r libraries, message=FALSE, warning=FALSE, error=FALSE, results="hide", echo=FALSE}
+require(bitops)
+require(RCurl)
+require(caret)
+require(randomForest)
+require(doParallel)
+
+```
+
+The original data set for this project can be taken from this URL: http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv.
+
+``` {r downloadAndParseCsv, cache=TRUE, message=FALSE, warning=FALSE}
+csvFromUrl <- getURL("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+```
+
+For the purpose of the algorithm building, we will remove the columns which have NA values.
+
+``` {r removingNAValues}
+
+originalDataSet <- read.csv(text = csvFromUrl, na.strings=c("", "NA"))
+dataset_noNA <- originalDataSet[,colSums(is.na(originalDataSet)) == 0]
+dim(dataset_noNA)
+
+```
+
+There are also columns which are not really relevant to the prediction, such as user names and timestamp relevant columns. Those columns are also removed. 
+
+
+``` {r removeNonRelevantColumn}
+
+removedColumns <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+datasetFinal <- dataset_noNA[, -which(names(dataset_noNA) %in% removedColumns)]
+dim(datasetFinal)
+
+```
+
+So we arrived at our final dataset, which contains `r dim(datasetFinal)[1]` observations of `r dim(datasetFinal)[2]` variables. One of them would be the outcome and `r dim(datasetFinal)[2] - 1` are predictors.
+
+## PARTITIONING DATA SETS
+
+We will split the data set, 70% for training and 30% for testing. The variable 'classe' is used as the outcome.
+
+
+``` {r partitioningDataSets}
+
+set.seed(12345)
+inTrain <- createDataPartition(y = datasetFinal$classe, p = 0.7, list=FALSE)
+training <- datasetFinal[inTrain,]
+test <- datasetFinal[-inTrain,]
+
+dim(training)
+dim(test)
+
+```
+
+That leaves us with `r dim(training)[1]` observations for training set and `r dim(test)[1]` observations for test set.
+
+
+## MODEL
+
+As the dataset is quite large, running the training with the caret default may take too long to run in commodity hardware.
+
+A train control and some tuning parameters are chosen to try to get a balance between speed and accuracy. The model computation also will be run with parallel processing to try to speed it up. A seed variable is set to ensure that the model is reproducible.
+
+
+``` {r trainControl}
+set.seed(98765)
+
+seeds <- vector(mode = "list", length = 11)
+for(i in 1:10) seeds[[i]]<- sample.int(n=1000, ncol(training) - 2)
+
+trainControlFunction <- trainControl(method='cv', seeds=seeds, index=createFolds(training$classe))
+
+numberOfTrees <- 200
+cl <- makeCluster(detectCores())
+ registerDoParallel(cl)
+```
+
+With the control and parameters, we will now try to build the model.
+
+``` {r buildModel, cache=TRUE}
+
+model <- train(classe ~ ., method='rf', trControl=trainControlFunction, ntree=numberOfTrees,importance=TRUE,data=training)
+
+```
+
+The final model printout describes the estimated out of bag error rate for the random forest. This would be the expected error rate when we run the model against the test set later.
+
+``` {r oobAndConfusionMatrix}
+
+model$finalModel
+
+```
+
+From the model, we can take a look at the top 20 most important variables.
+
+``` {r varImpMethod}
+
+varImp(model)
+
+```
+
+## TEST
+
+We now run our test set against the model.
+
+``` {r testModel}
+
+prediction <- predict(model, test)
+numberOfCorrect <- sum(prediction == test$classe)
+numberOfIncorrect <- sum(prediction != test$classe)
+table(prediction,test$classe)
+
+```
+
+The wrong prediction is `r numberOfIncorrect`. There were `r dim(test)[1]` number of observation in test set, so the out of sample error rate is `r numberOfIncorrect/dim(test)[1]` which is close to the estimated error rate from the model.
+
+## SUBMISSION
+
+The model is now run against the submission data set.
+
+``` {r getAndCleanTestData}
+
+testGetUrl <- getURL("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+testData <- read.csv(text = testGetUrl, na.strings=c("", "NA"))
+testData_noNA <- testData[,colSums(is.na(testData)) == 0]
+testDatasetFinal <- testData_noNA[, -which(names(testData_noNA) %in% removedColumns)]
+predsubmission <- predict(model, testDatasetFinal)
+predsubmission
+
+```
+
+## CITATIONS
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+Cited by 2 (Google Scholar)
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3s8G44b8o
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3s8Fo9qYK
+
+
+
